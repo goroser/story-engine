@@ -117,6 +117,37 @@ book itself — fine for a private family keepsake, not something to publish,
 print for sale, or post publicly. `story-engine` doesn't enforce this; it's
 on you per-story.
 
+## Deploying for iPad (password-protected)
+
+For a real Home Screen app experience — not just local preview — the site
+exports to `site/` (gallery + every illustrated story) and deploys to Vercel
+behind HTTP Basic Auth via a Vercel Edge Middleware (`vercel/middleware.js`,
+copied in at deploy time). This is on Vercel's free Hobby plan; their built-in
+password protection is Pro-only, so this rolls a simple equivalent instead.
+Still worth remembering: it's on the public internet, gated only by whatever
+password you set — not the same privacy bar as a purely local file.
+
+**One-time setup** (account auth has to be you — I can't log in on your
+behalf):
+```bash
+npx vercel login                                   # sign in (GitHub/email, free)
+npx vercel link                                     # from repo root, creates/links the project
+npx vercel env add SITE_PASSWORD production          # a password you'll type once on iPad
+npx vercel env add SITE_USER production               # optional, defaults to "yan"
+```
+
+**Every time you want to push the latest stories:**
+```bash
+./scripts/deploy.sh
+```
+This builds, runs `scripts/export-site.mjs`, adds `robots.txt` (disallow all
+— kept out of search indexes on top of the password) and the middleware,
+then deploys `site/` to production.
+
+**On the iPad:** open the deployed URL in Safari, enter the username/password
+once (Safari offers to save it), then Share → Add to Home Screen for an
+app-like icon with no browser chrome.
+
 ## Viewing a built book
 
 `build_book`'s output uses relative paths back into `data/images/`, so open

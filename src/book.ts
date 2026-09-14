@@ -65,6 +65,7 @@ export function renderBookHtml(story: Story, imageRelPaths: Record<string, strin
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${escapeHtml(story.title)}</title>
+<meta name="robots" content="noindex, nofollow">
 <style>
   :root {
     color-scheme: light;
