@@ -126,9 +126,13 @@ export async function generateChunkImage({
     });
     parts.push({
       text:
-        "The attached image is the approved character reference sheet. Match every character's design " +
-        "exactly — proportions, colors, markings, accessories — but this is a reference sheet, not a scene: " +
-        "do not copy its plain background, its pose, or its camera framing into the new illustration.",
+        "The attached image is the approved character reference sheet, showing the full cast. For any " +
+        "character that DOES appear in this scene, match their design from it exactly — proportions, " +
+        "colors, markings, accessories. But it's a reference sheet, not a scene: do not copy its plain " +
+        "background, poses, or camera framing, and — importantly — do not include a character from it " +
+        "who isn't actually called for by the scene description below. Only draw the characters the scene " +
+        "text mentions or clearly implies; if a character hasn't been introduced into the story yet at " +
+        "this point, they must not appear, even in the background.",
     });
   }
 
