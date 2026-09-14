@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "story-engine": {
+      "command": "node",
+      "args": ["dist/index.js"]
+    }
+  }
+}
