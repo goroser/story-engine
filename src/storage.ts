@@ -83,4 +83,4 @@ export function updateStory<T>(
   });
 }
 
-export { dataFile };
+export { dataDir, dataFile };

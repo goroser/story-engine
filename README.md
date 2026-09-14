@@ -21,7 +21,15 @@ a thin, dependency-free data layer.
 - `regenerate_chunk(story_id, chunk_id, text?, image_prompt?)` — redo one
   chunk's text and/or image prompt in place. Changing the prompt clears any
   previously attached image, since it no longer matches.
-- `attach_image(story_id, chunk_id, image_url)` — record a nano banana result.
+- `attach_image(story_id, chunk_id, image_url)` — record a nano banana result
+  generated outside the server (e.g. by hand in AI Studio).
+- `generate_image(story_id, chunk_id, reference_chunk_id?)` — call nano banana
+  (Gemini 2.5 Flash Image) directly: `character_bible` + the chunk's
+  `image_prompt`, optionally grounded on another chunk's already-generated
+  image via `reference_chunk_id` for character/setting consistency (camera
+  angle and pose are deliberately left free to vary, per the spec). Saves the
+  PNG under `data/images/<story_id>/<chunk_id>.png` and attaches it — same
+  effect as `attach_image`, just automatic. Requires `GEMINI_API_KEY`.
 - `rate_story(id, reaction, notes?)` — log how it landed (e.g. `"loved"`), to
   steer future prompts.
 
@@ -39,6 +47,19 @@ npm install
 npm run build
 ```
 
+To use `generate_image`, put a Gemini API key in `.env` (gitignored, not
+committed):
+
+```
+GEMINI_API_KEY=your-key-here
+```
+
+Get one at [Google AI Studio](https://aistudio.google.com/apikey). Note:
+Gemini's image models (nano banana) require **billing enabled** on the
+associated Cloud project — the free tier's request quota for image models is
+0, so an API-key-only free-tier project will get a `RESOURCE_EXHAUSTED` error
+with `limit: 0` on every call until billing is turned on.
+
 Register it with Claude Code / Claude Desktop by pointing at the built entry
 point:
 
@@ -55,15 +76,30 @@ point:
 
 (For Claude Code: `claude mcp add story-engine -- node /Users/romangorbatov/code/story-engine/dist/index.js`)
 
+## Manual testing
+
+`scripts/try-generate-image.mjs` calls `generate_image` over a real MCP
+stdio connection, without needing a full chat session:
+
+```bash
+node scripts/try-generate-image.mjs <story_id> <chunk_id> [reference_chunk_id]
+```
+
 ## Status vs. the spec's build order
 
 1. ✅ Scaffolded server, `create_story` + `get_story`, flat JSON storage.
-2. ⬜ Generate one full story end-to-end through a live Claude session and
-   confirm the tool calls feel natural.
-3. ⬜ Manually feed image prompts to nano banana; confirm consistency holds.
-4. ✅ `attach_image` implemented (ready once step 3 produces URLs).
+2. ✅ Generated one full story ("Хэри Маклери и муравьед", 10 chunks) through
+   a live Claude session via the real tool calls.
+3. 🟡 `generate_image` calls nano banana directly and is verified against the
+   real API (correct model, request shape, error handling) — but the current
+   `GEMINI_API_KEY`'s project has no billing enabled, so every call currently
+   returns `RESOURCE_EXHAUSTED` (free-tier image quota is 0). Enable billing
+   on the key's Google Cloud project, then re-run to confirm consistency
+   holds across chunks.
+4. ✅ `attach_image` implemented and exercised.
 5. ✅ `list_stories` / `rate_story` implemented.
-6. ⬜ Auto-call nano banana from the server; PDF/web assembly; TTS.
+6. 🟡 Auto-call nano banana from the server — done (`generate_image`), blocked
+   on billing above. PDF/web assembly and TTS still open.
 7. ⬜ iPad viewer (static site reading the story data, Add to Home Screen).
 
 ## Open questions (from the spec, still unresolved)

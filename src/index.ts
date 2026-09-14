@@ -1,10 +1,22 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { getStoryById, loadStories, saveStory, updateStory } from "./storage.js";
+import { generateChunkImage, NanoBananaError } from "./nanobanana.js";
+import { dataDir, getStoryById, loadStories, saveStory, updateStory } from "./storage.js";
 import type { Chunk, Story } from "./types.js";
+
+// Load GEMINI_API_KEY (and friends) from a local .env file if present. Never
+// throws — the file is optional, e.g. when the key is set in the MCP client's
+// own env config instead.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env file — fine, env vars may already be set another way
+}
 
 const server = new McpServer({
   name: "story-engine",
@@ -217,6 +229,77 @@ server.registerTool(
     if (!outcome) return errorResult(`No story found with id "${story_id}".`);
     if (!outcome.result) return errorResult(`No chunk found with id "${chunk_id}" in story "${story_id}".`);
     return textResult(outcome.result);
+  }
+);
+
+// ---------------------------------------------------------------------------
+// generate_image
+//
+// Calls nano banana (Gemini 2.5 Flash Image) directly, saves the result under
+// data/images/, and attaches it to the chunk — the auto-call step from the
+// spec's build order, instead of manually copy-pasting prompts into a UI.
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "generate_image",
+  {
+    title: "Generate image",
+    description:
+      "Render one chunk's illustration by calling nano banana (Gemini 2.5 Flash Image) with the " +
+      "story's character_bible plus this chunk's image_prompt. Optionally pass reference_chunk_id " +
+      "to ground it on another chunk's already-generated image, for consistent character/setting " +
+      "look across the book (camera angle and pose are still left free to vary). Saves the PNG " +
+      "locally under data/images/ and records it on the chunk, same effect as attach_image. " +
+      "Requires GEMINI_API_KEY in the server's environment.",
+    inputSchema: {
+      story_id: z.string().min(1),
+      chunk_id: z.string().min(1),
+      reference_chunk_id: z.string().min(1).optional(),
+    },
+  },
+  async ({ story_id, chunk_id, reference_chunk_id }) => {
+    const story = await getStoryById(story_id);
+    if (!story) return errorResult(`No story found with id "${story_id}".`);
+    const chunk = story.chunks.find((c) => c.id === chunk_id);
+    if (!chunk) return errorResult(`No chunk found with id "${chunk_id}" in story "${story_id}".`);
+
+    let referenceImage: { bytes: Buffer; mimeType: string } | undefined;
+    if (reference_chunk_id) {
+      const refChunk = story.chunks.find((c) => c.id === reference_chunk_id);
+      if (!refChunk) {
+        return errorResult(`No chunk found with id "${reference_chunk_id}" in story "${story_id}".`);
+      }
+      if (!refChunk.image_url) {
+        return errorResult(`Reference chunk "${reference_chunk_id}" has no generated image yet.`);
+      }
+      try {
+        const bytes = await readFile(refChunk.image_url);
+        referenceImage = { bytes, mimeType: "image/png" };
+      } catch (err) {
+        return errorResult(`Could not read reference image at "${refChunk.image_url}": ${(err as Error).message}`);
+      }
+    }
+
+    let image;
+    try {
+      image = await generateChunkImage({ story, chunk, referenceImage });
+    } catch (err) {
+      if (err instanceof NanoBananaError) return errorResult(err.message);
+      return errorResult(`Unexpected error calling nano banana: ${(err as Error).message}`);
+    }
+
+    const ext = image.mimeType.includes("png") ? "png" : image.mimeType.split("/")[1] || "png";
+    const imageDir = join(dataDir, "images", story_id);
+    await mkdir(imageDir, { recursive: true });
+    const imagePath = join(imageDir, `${chunk_id}.${ext}`);
+    await writeFile(imagePath, image.bytes);
+
+    const outcome = await updateStory(story_id, (s) => {
+      const c = s.chunks.find((c) => c.id === chunk_id)!;
+      c.image_url = imagePath;
+      c.status = "has_image";
+      return c;
+    });
+    return textResult(outcome!.result);
   }
 );
 
