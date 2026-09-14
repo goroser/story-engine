@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { renderBookHtml } from "./book.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -483,6 +484,55 @@ server.registerTool(
     });
     if (!outcome) return errorResult(`No story found with id "${id}".`);
     return textResult(summarize(outcome.story));
+  }
+);
+
+// ---------------------------------------------------------------------------
+// build_book
+//
+// Assembles a story into a single self-contained, flippable HTML page —
+// step 6/7 of the spec's build order (simple web assembly), scoped to a
+// local file rather than a hosted page since story content can include
+// copyrighted characters the user wants to keep strictly private.
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "build_book",
+  {
+    title: "Build book",
+    description:
+      "Assemble a story into a single self-contained HTML page you can open locally and flip through " +
+      "(swipe, arrow keys, or on-screen buttons) — a cover, one spread per chunk (image + text), and an " +
+      "end page. Chunks without a generated image yet show a placeholder. Safe to re-run any time the " +
+      "story or its images change; overwrites the previous build.",
+    inputSchema: {
+      story_id: z.string().min(1),
+    },
+  },
+  async ({ story_id }) => {
+    const story = await getStoryById(story_id);
+    if (!story) return errorResult(`No story found with id "${story_id}".`);
+
+    const bookDir = join(dataDir, "books");
+    await mkdir(bookDir, { recursive: true });
+    const outPath = join(bookDir, `${story_id}.html`);
+
+    const imageRelPaths: Record<string, string | undefined> = {};
+    for (const chunk of story.chunks) {
+      if (chunk.image_url) {
+        imageRelPaths[chunk.id] = relative(bookDir, chunk.image_url).split("\\").join("/");
+      }
+    }
+
+    const html = renderBookHtml(story, imageRelPaths);
+    await writeFile(outPath, html, "utf-8");
+
+    const missing = story.chunks.filter((c) => !c.image_url).length;
+    return textResult({
+      story_id,
+      path: outPath,
+      pages: story.chunks.length + 2,
+      chunks_missing_image: missing,
+    });
   }
 );
 

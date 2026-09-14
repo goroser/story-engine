@@ -51,6 +51,11 @@ a thin, dependency-free data layer.
   `attach_image`, just automatic. Requires `GEMINI_API_KEY`.
 - `rate_story(id, reaction, notes?)` — log how it landed (e.g. `"loved"`), to
   steer future prompts.
+- `build_book(story_id)` — assemble the story into a single self-contained
+  HTML page you can flip through (swipe, arrow keys, or on-screen buttons):
+  a cover, one spread per chunk, an end page. Written to
+  `data/books/<story_id>.html`. Safe to re-run any time images or text
+  change.
 
 ## Storage
 
@@ -112,6 +117,20 @@ book itself — fine for a private family keepsake, not something to publish,
 print for sale, or post publicly. `story-engine` doesn't enforce this; it's
 on you per-story.
 
+## Viewing a built book
+
+`build_book`'s output uses relative paths back into `data/images/`, so open
+it through a local static server rather than double-clicking the file — some
+browsers block `file://` pages from loading sibling files, and the Claude
+Code preview pane always does. A `.claude/launch.json` is included:
+
+```bash
+python3 -m http.server 8934 --directory data
+```
+
+then open `http://localhost:8934/books/<story_id>.html` (root must be
+`data/`, not `data/books/`, so `../images/...` resolves).
+
 ## Manual testing
 
 `scripts/try-tool.mjs` calls any tool over a real MCP stdio connection,
@@ -136,9 +155,12 @@ is a thin positional-args wrapper around `generate_image` specifically.
    confirmed consistency holds — see note below on the reference technique.
 4. ✅ `attach_image` implemented and exercised.
 5. ✅ `list_stories` / `rate_story` implemented.
-6. 🟡 Auto-call nano banana from the server — done (`generate_image`). PDF/web
-   assembly and TTS still open.
-7. ⬜ iPad viewer (static site reading the story data, Add to Home Screen).
+6. 🟡 Auto-call nano banana from the server (`generate_image`) — done. Web
+   assembly of the finished book — done (`build_book`). PDF export and
+   read-aloud/TTS still open.
+7. ⬜ iPad viewer as a hosted, auto-updating site (`build_book` covers the
+   local single-story page; a Supabase-backed, always-current gallery is
+   still open — see open questions below).
 
 ### Consistency lessons learned
 
