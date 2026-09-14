@@ -117,36 +117,68 @@ book itself — fine for a private family keepsake, not something to publish,
 print for sale, or post publicly. `story-engine` doesn't enforce this; it's
 on you per-story.
 
-## Deploying for iPad (password-protected)
+## Deploying: self-service, password-protected site (`web/`)
 
-For a real Home Screen app experience — not just local preview — the site
-exports to `site/` (gallery + every illustrated story) and deploys to Vercel
-behind HTTP Basic Auth via a Vercel Edge Middleware (`vercel/middleware.js`,
-copied in at deploy time). This is on Vercel's free Hobby plan; their built-in
-password protection is Pro-only, so this rolls a simple equivalent instead.
-Still worth remembering: it's on the public internet, gated only by whatever
-password you set — not the same privacy bar as a purely local file.
+`web/` is a dynamic, Supabase-backed site deployed to Vercel: a gallery with
+an **"Add a story"** card that writes a new story with Claude, illustrates it
+with nano banana, and makes it available live — no local step, no redeploy.
+Everything (pages, the generation API, and every image) sits behind the same
+HTTP Basic Auth gate (`web/middleware.js`, a Vercel Edge Middleware — free
+Hobby plan; Vercel's built-in password protection is Pro-only).
 
-**One-time setup** (account auth has to be you — I can't log in on your
-behalf):
-```bash
-npx vercel login                                   # sign in (GitHub/email, free)
-npx vercel link                                     # from repo root, creates/links the project
-npx vercel env add SITE_PASSWORD production          # a password you'll type once on iPad
-npx vercel env add SITE_USER production               # optional, defaults to "yan"
-```
+**Why a whole backend instead of the static export:** the browser never
+talks to Supabase directly. If it did (the usual "embed the anon key"
+pattern), anyone with that key could read stories/images straight from
+Supabase's API, bypassing the password wall entirely — not acceptable given
+some stories may use copyrighted characters meant to stay private. Instead,
+`web/api/*.js` reads and writes Supabase server-side with the service_role
+key, and RLS on every table/bucket has zero policies (default-deny) — so a
+leaked anon key alone gives an attacker nothing. One password gate, no
+matter how you're reading data.
 
-**Every time you want to push the latest stories:**
+**One-time setup** (account auth has to be you — I can't do this part):
+1. Create a free [Supabase](https://supabase.com) project, then run
+   [`supabase/schema.sql`](supabase/schema.sql) in its SQL Editor.
+2. From Supabase → Project Settings → API, grab the **Project URL**,
+   **anon key** *(unused by this app, but Supabase always shows it)*, and
+   **service_role key**.
+3. Get an [Anthropic API key](https://console.anthropic.com) — the backend
+   writes stories on its own, with no chat session in the loop.
+4. ```bash
+   cd web
+   npx vercel login    # sign in, free account is fine
+   npx vercel link     # creates/links the Vercel project
+   npx vercel env add SITE_PASSWORD production           # typed once on iPad
+   npx vercel env add SITE_USER production                 # optional, defaults to "yan"
+   npx vercel env add SUPABASE_URL production
+   npx vercel env add SUPABASE_SERVICE_ROLE_KEY production
+   npx vercel env add ANTHROPIC_API_KEY production
+   npx vercel env add GEMINI_API_KEY production            # same key the MCP server uses
+   ```
+
+**To push a code change** (new stories need no redeploy — they're live the
+moment generation finishes):
 ```bash
 ./scripts/deploy.sh
 ```
-This builds, runs `scripts/export-site.mjs`, adds `robots.txt` (disallow all
-— kept out of search indexes on top of the password) and the middleware,
-then deploys `site/` to production.
 
 **On the iPad:** open the deployed URL in Safari, enter the username/password
-once (Safari offers to save it), then Share → Add to Home Screen for an
-app-like icon with no browser chrome.
+once (Safari offers to save it), then Share → Add to Home Screen.
+
+**Generation takes 1-3 minutes** (writing the story, then a reference sheet
+plus one nano banana call per chunk) — the function runs in the background
+via `waitUntil` after responding, and both the gallery card and the book
+page poll until it's ready. `web/api/generate-story.js` has `maxDuration: 300`
+set in `web/vercel.json`; if a book has many chunks and starts timing out,
+raise that (Vercel plan permitting).
+
+### Local-only alternative (`site/`, superseded for hosting)
+
+`scripts/export-site.mjs` + `scripts/deploy.sh`'s old flow (a fully static
+export of `data/stories.json`) is no longer what gets deployed, but
+`build_book` (see above) and serving `data/` locally still work exactly as
+before for previewing a story before you'd want it on the hosted gallery —
+useful if you're iterating via chat/MCP rather than the web form.
 
 ## Viewing a built book
 

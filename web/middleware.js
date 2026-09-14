@@ -1,8 +1,8 @@
-// Vercel Edge Middleware — gates every request behind HTTP Basic Auth.
-// Framework-agnostic: Vercel runs this on the Edge Network before serving
-// any request, static files included, as long as it's a `middleware.js`
-// at the root of the deployed project (see scripts/deploy.sh, which copies
-// this file into site/ before deploying).
+// Vercel Edge Middleware — gates every request behind HTTP Basic Auth,
+// including /api/* (so generation can't be triggered without the site
+// password either). Framework-agnostic: Vercel runs this on the Edge
+// Network before serving any request, as long as it's a `middleware.js`
+// at the root of the deployed project (this directory, web/).
 //
 // Reads SITE_USER / SITE_PASSWORD from the Vercel project's environment
 // variables (Project Settings → Environment Variables) — never hardcode

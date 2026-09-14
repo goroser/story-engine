@@ -1,27 +1,29 @@
 #!/usr/bin/env bash
-# Builds the site export and deploys it to Vercel, password-gated.
+# Deploys web/ (the dynamic, Supabase-backed site + generation API) to Vercel.
 #
 # One-time setup (you do this yourself — account auth can't be done for you):
-#   1. npx vercel login          (log in with GitHub/email — free account is fine)
-#   2. npx vercel link           (run from repo root; creates/links a Vercel project)
-#   3. npx vercel env add SITE_PASSWORD production   (paste a password you'll type on iPad)
-#      npx vercel env add SITE_USER production       (optional; defaults to "yan")
+#   1. Create a Supabase project (free tier) at supabase.com, then run
+#      supabase/schema.sql in its SQL editor.
+#   2. cd web && npx vercel login          (log in with GitHub/email)
+#   3. npx vercel link                      (creates/links the Vercel project)
+#   4. Set these as Production env vars (npx vercel env add <NAME> production):
+#        SITE_PASSWORD          — password you'll type on iPad
+#        SITE_USER              — optional, defaults to "yan"
+#        SUPABASE_URL           — from Supabase Project Settings → API
+#        SUPABASE_SERVICE_ROLE_KEY — same page (server-only, never exposed)
+#        ANTHROPIC_API_KEY      — from console.anthropic.com
+#        GEMINI_API_KEY         — from aistudio.google.com (same key as the MCP server)
 #
-# Then just run this script whenever you want to push the latest stories:
+# Then just run this script whenever you want to push a code change:
 #   ./scripts/deploy.sh
+# (New stories don't need a redeploy — they're generated live via /api and
+# read live from Supabase.)
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../web"
 
-echo "==> Building TypeScript"
-npm run build
-
-echo "==> Exporting static site"
-node scripts/export-site.mjs
-
-echo "==> Adding robots.txt and Vercel middleware"
-printf 'User-agent: *\nDisallow: /\n' > site/robots.txt
-cp vercel/middleware.js site/middleware.js
+echo "==> Installing web/ dependencies"
+npm install --no-audit --no-fund
 
 echo "==> Deploying to Vercel"
-npx vercel deploy site --prod
+npx vercel deploy --prod

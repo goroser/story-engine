@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Истории</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Истории">
+<style>
+  :root { color-scheme: light; --paper:#fbf6ec; --ink:#3a2e22; --accent:#c96a3b; --muted:#8a7b64; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Georgia, serif;
+    padding: max(20px, env(safe-area-inset-top)) 20px 40px;
+  }
+  h1 { text-align: center; font-size: clamp(24px, 5vw, 36px); margin: 12px 0 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px; max-width: 1000px; margin: 0 auto; }
+  .card {
+    display: block; text-decoration: none; color: inherit; background: #fff;
+    border-radius: 16px; overflow: hidden; box-shadow: 0 2px 10px rgba(58,46,34,0.12);
+    cursor: pointer; border: none; text-align: left; font: inherit; padding: 0;
+  }
+  .card img, .no-cover, .add-cover {
+    width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; background: #eee4d0;
+  }
+  .add-cover { display: flex; align-items: center; justify-content: center; font-size: 48px; color: var(--accent); background: #f3e9d6; }
+  .card-body { padding: 12px 14px 16px; }
+  .card-body h2 { margin: 0 0 4px; font-size: 17px; }
+  .card-body p { margin: 0; font-size: 13px; color: var(--muted); }
+  .status-badge {
+    display: inline-block; margin-top: 6px; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+    background: #f3e9d6; color: var(--accent);
+  }
+
+  dialog {
+    border: none; border-radius: 16px; padding: 0; width: min(480px, 92vw);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+  }
+  dialog::backdrop { background: rgba(20,15,10,0.5); }
+  .dialog-inner { padding: 22px 22px 24px; }
+  .dialog-inner h2 { margin: 0 0 14px; font-size: 20px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  textarea, input[type=text] {
+    width: 100%; font: inherit; font-size: 15px; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid #ddd0b8; background: #fffdf8; resize: vertical;
+  }
+  textarea { min-height: 80px; }
+  input[type=file] { font-size: 13px; }
+  .file-preview { margin-top: 8px; max-width: 100px; border-radius: 8px; display: none; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+  button.primary, button.secondary {
+    font: inherit; font-size: 14px; padding: 9px 18px; border-radius: 999px; border: none; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: #fff; }
+  button.secondary { background: transparent; color: var(--muted); }
+  button.primary:disabled { opacity: 0.5; cursor: default; }
+  .error-msg { color: #b3492c; font-size: 13px; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+  <h1>📖 Истории</h1>
+  <div class="grid" id="grid">
+    <p style="text-align:center;color:var(--muted)">Загрузка…</p>
+  </div>
+
+  <dialog id="addDialog">
+    <div class="dialog-inner">
+      <h2>Новая история</h2>
+      <form id="addForm">
+        <label for="prompt">О чём история?</label>
+        <textarea id="prompt" required placeholder="Например: лисёнок, который боится темноты, учится быть смелым"></textarea>
+
+        <label for="age">Возраст</label>
+        <input type="text" id="age" value="3-6">
+
+        <label for="charImage">Референс персонажа (необязательно)</label>
+        <input type="file" id="charImage" accept="image/*">
+        <img class="file-preview" id="filePreview" alt="">
+
+        <div class="error-msg" id="errorMsg"></div>
+        <div class="dialog-actions">
+          <button type="button" class="secondary" id="cancelBtn">Отмена</button>
+          <button type="submit" class="primary" id="submitBtn">Сгенерировать</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+<script>
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function imgSrc(path) { return path ? "/api/image?path=" + encodeURIComponent(path) : null; }
+
+async function loadGallery() {
+  const grid = document.getElementById("grid");
+  let stories = [];
+  let loadError = false;
+  try {
+    const res = await fetch("/api/stories");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    stories = data.stories || [];
+  } catch (e) {
+    loadError = true;
+  }
+
+  const cards = stories.map((s) => {
+    const cover = imgSrc(s.reference_image_path);
+    const badge =
+      s.status === "generating" ? '<div class="status-badge">✨ Генерируется…</div>' :
+      s.status === "error" ? '<div class="status-badge" style="color:#b3492c">Ошибка</div>' : "";
+    return (
+      '<a class="card" href="book.html?id=' + esc(s.id) + '">' +
+        (cover ? '<img src="' + esc(cover) + '" alt="">' : '<div class="no-cover"></div>') +
+        '<div class="card-body"><h2>' + esc(s.title) + '</h2>' +
+        '<p>' + esc(s.theme) + (s.age_level ? " · " + esc(s.age_level) : "") + " · " + (s.chunk_count || 0) + ' стр.</p>' +
+        badge +
+        '</div></a>'
+    );
+  });
+
+  const addCard =
+    '<button class="card" id="addCard" type="button">' +
+      '<div class="add-cover">+</div>' +
+      '<div class="card-body"><h2>Добавить историю</h2><p>Новая иллюстрированная книга</p></div>' +
+    '</button>';
+
+  const errorNote = loadError
+    ? "<p style='text-align:center;color:var(--muted);grid-column:1/-1'>Не удалось загрузить истории — можно всё равно добавить новую.</p>"
+    : "";
+  grid.innerHTML = addCard + errorNote + cards.join("\n");
+  document.getElementById("addCard").addEventListener("click", () => addDialog.showModal());
+
+  // Auto-refresh while anything is still generating.
+  if (stories.some((s) => s.status === "generating")) setTimeout(loadGallery, 5000);
+}
+
+const addDialog = document.getElementById("addDialog");
+document.getElementById("cancelBtn").addEventListener("click", () => addDialog.close());
+
+let charImageBase64 = null, charImageMime = null;
+document.getElementById("charImage").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  const preview = document.getElementById("filePreview");
+  if (!file) { charImageBase64 = null; preview.style.display = "none"; return; }
+
+  // Downscale client-side so the upload stays small and reliable.
+  const bitmap = await createImageBitmap(file);
+  const maxDim = 1024;
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+  charImageMime = "image/jpeg";
+  charImageBase64 = dataUrl.split(",")[1];
+  preview.src = dataUrl;
+  preview.style.display = "block";
+});
+
+document.getElementById("addForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const submitBtn = document.getElementById("submitBtn");
+  const errorMsg = document.getElementById("errorMsg");
+  errorMsg.style.display = "none";
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Отправляем…";
+
+  const body = {
+    prompt: document.getElementById("prompt").value.trim(),
+    age_level: document.getElementById("age").value.trim(),
+  };
+  if (charImageBase64) body.character_image = { base64: charImageBase64, mimeType: charImageMime };
+
+  try {
+    const res = await fetch("/api/generate-story", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok && res.status !== 202) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || ("HTTP " + res.status));
+    }
+    addDialog.close();
+    document.getElementById("addForm").reset();
+    document.getElementById("filePreview").style.display = "none";
+    charImageBase64 = null;
+    loadGallery();
+  } catch (err) {
+    errorMsg.textContent = "Не получилось: " + err.message;
+    errorMsg.style.display = "block";
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Сгенерировать";
+  }
+});
+
+loadGallery();
+</script>
+</body>
+</html>

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Story Engine — Book</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root {
+    color-scheme: light;
+    --paper: #fbf6ec;
+    --ink: #3a2e22;
+    --accent: #c96a3b;
+    --muted: #8a7b64;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #2b2620;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Georgia, serif;
+    color: var(--ink);
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #status {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    color: #f0e6d2;
+    text-align: center;
+    padding: 24px;
+  }
+  #status a { color: var(--accent); }
+  .spinner {
+    width: 32px; height: 32px;
+    border-radius: 999px;
+    border: 3px solid rgba(255,255,255,0.25);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #book { position: relative; width: 100%; height: 100%; display: none; }
+  .page {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    background: var(--paper);
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.35s ease;
+  }
+  .page.active { opacity: 1; visibility: visible; }
+
+  .cover { align-items: center; justify-content: flex-end; }
+  .cover-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .cover-overlay {
+    position: relative; z-index: 1; width: 100%;
+    padding: 32px 28px calc(64px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, rgba(20,15,10,0.85) 0%, rgba(20,15,10,0.55) 60%, transparent 100%);
+    text-align: center;
+  }
+  .cover h1 { margin: 0 0 8px; color: #fff8ec; font-size: clamp(28px, 6vw, 48px); text-shadow: 0 2px 10px rgba(0,0,0,0.4); }
+  .cover-sub { margin: 0; color: #f0e6d2; font-size: clamp(14px, 2.5vw, 18px); }
+
+  .spread-image { flex: 1 1 60%; min-height: 0; display: flex; align-items: center; justify-content: center; background: #eee4d0; overflow: hidden; }
+  .spread-image img { width: 100%; height: 100%; object-fit: contain; }
+  .spread-text { flex: 0 0 auto; padding: 20px 28px calc(24px + env(safe-area-inset-bottom)); max-height: 40%; overflow-y: auto; }
+  .spread-text p { margin: 0; font-size: clamp(16px, 2.6vw, 22px); line-height: 1.5; text-align: center; }
+
+  .end { align-items: center; justify-content: center; text-align: center; }
+  .the-end { font-size: clamp(30px, 6vw, 52px); color: var(--accent); margin: 0 0 12px; }
+  .end-title { color: var(--muted); font-size: clamp(14px, 2.5vw, 18px); margin: 0; }
+
+  .nav-zone { position: absolute; top: 0; bottom: 0; width: 30%; z-index: 5; cursor: pointer; }
+  .nav-zone.prev { left: 0; } .nav-zone.next { right: 0; }
+  .arrow-btn {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 6;
+    width: 44px; height: 44px; border-radius: 999px; border: none;
+    background: rgba(58,46,34,0.55); color: #fbf6ec; font-size: 20px; line-height: 1;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .arrow-btn:disabled { opacity: 0.25; cursor: default; }
+  .arrow-btn.prev { left: 14px; } .arrow-btn.next { right: 14px; }
+  .back-btn {
+    position: absolute; top: calc(10px + env(safe-area-inset-top)); left: 10px; z-index: 7;
+    width: 36px; height: 36px; border-radius: 999px; border: none;
+    background: rgba(58,46,34,0.55); color: #fbf6ec; font-size: 16px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; text-decoration: none;
+  }
+  .progress { position: absolute; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 6; display: flex; gap: 6px; }
+  .progress .dot { width: 6px; height: 6px; border-radius: 999px; background: rgba(58,46,34,0.25); }
+  .progress .dot.current { background: var(--accent); width: 16px; }
+</style>
+</head>
+<body>
+  <div id="status">
+    <div class="spinner"></div>
+    <p>Загружаем историю…</p>
+  </div>
+  <div id="book"></div>
+
+<script>
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function imgSrc(path) { return path ? "/api/image?path=" + encodeURIComponent(path) : null; }
+
+async function load() {
+  const id = new URLSearchParams(location.search).get("id");
+  const statusEl = document.getElementById("status");
+  if (!id) { statusEl.innerHTML = "<p>Не указан id истории.</p>"; return; }
+
+  let res;
+  try {
+    res = await fetch("/api/story?id=" + encodeURIComponent(id));
+  } catch (e) {
+    statusEl.innerHTML = "<p>Ошибка сети. <a href=\"javascript:location.reload()\">Обновить</a></p>";
+    return;
+  }
+  if (!res.ok) {
+    statusEl.innerHTML = "<p>История не найдена.</p><p><a href=\"/\">На главную</a></p>";
+    return;
+  }
+  const { story, chunks } = await res.json();
+
+  if (story.status === "generating") {
+    statusEl.innerHTML =
+      "<div class=\"spinner\"></div><p>Пишем историю и рисуем картинки…<br>обычно 1-3 минуты.</p>";
+    setTimeout(load, 4000);
+    return;
+  }
+  if (story.status === "error") {
+    statusEl.innerHTML =
+      "<p>Не получилось: " + esc(story.error_message || "неизвестная ошибка") + "</p><p><a href=\"/\">На главную</a></p>";
+    return;
+  }
+
+  renderBook(story, chunks);
+}
+
+function renderBook(story, chunks) {
+  document.title = story.title;
+  const bookEl = document.getElementById("book");
+  const coverImg = imgSrc(chunks[0]?.image_path);
+
+  const pages = [];
+  pages.push(
+    '<section class="page cover" data-page="0">' +
+      (coverImg ? '<img class="cover-image" src="' + esc(coverImg) + '" alt="">' : "") +
+      '<div class="cover-overlay"><h1>' + esc(story.title) + '</h1>' +
+      '<p class="cover-sub">' + esc(story.theme) + (story.age_level ? " · " + esc(story.age_level) : "") + '</p></div>' +
+      '</section>'
+  );
+  chunks.forEach((c, i) => {
+    const src = imgSrc(c.image_path);
+    pages.push(
+      '<section class="page spread" data-page="' + (i + 1) + '">' +
+        '<div class="spread-image">' + (src ? '<img src="' + esc(src) + '" alt="">' : '<div>Нет картинки</div>') + '</div>' +
+        '<div class="spread-text"><p>' + esc(c.text) + '</p></div>' +
+        '</section>'
+    );
+  });
+  pages.push(
+    '<section class="page end" data-page="' + (chunks.length + 1) + '">' +
+      '<div class="end-content"><p class="the-end">Конец</p><p class="end-title">' + esc(story.title) + '</p></div>' +
+      '</section>'
+  );
+
+  bookEl.innerHTML =
+    pages.join("\n") +
+    '<a class="back-btn" href="/" aria-label="Back">&#8617;</a>' +
+    '<button class="arrow-btn prev" aria-label="Previous page">&#8249;</button>' +
+    '<button class="arrow-btn next" aria-label="Next page">&#8250;</button>' +
+    '<div class="nav-zone prev" aria-hidden="true"></div>' +
+    '<div class="nav-zone next" aria-hidden="true"></div>' +
+    '<div class="progress"></div>';
+
+  document.getElementById("status").style.display = "none";
+  bookEl.style.display = "block";
+
+  const pageEls = Array.prototype.slice.call(bookEl.querySelectorAll(".page"));
+  const total = pageEls.length;
+  let current = 0;
+  const progress = bookEl.querySelector(".progress");
+  const prevBtn = bookEl.querySelector(".arrow-btn.prev");
+  const nextBtn = bookEl.querySelector(".arrow-btn.next");
+  for (let i = 0; i < total; i++) {
+    const dot = document.createElement("div");
+    dot.className = "dot";
+    progress.appendChild(dot);
+  }
+  const dots = Array.prototype.slice.call(progress.children);
+
+  function render() {
+    for (let i = 0; i < total; i++) {
+      pageEls[i].classList.toggle("active", i === current);
+      dots[i].classList.toggle("current", i === current);
+    }
+    prevBtn.disabled = current === 0;
+    nextBtn.disabled = current === total - 1;
+  }
+  function go(delta) {
+    const next = current + delta;
+    if (next < 0 || next >= total) return;
+    current = next;
+    render();
+  }
+  prevBtn.addEventListener("click", () => go(-1));
+  nextBtn.addEventListener("click", () => go(1));
+  bookEl.querySelector(".nav-zone.prev").addEventListener("click", () => go(-1));
+  bookEl.querySelector(".nav-zone.next").addEventListener("click", () => go(1));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight" || e.key === " ") go(1);
+    if (e.key === "ArrowLeft") go(-1);
+  });
+  let touchStartX = null;
+  document.addEventListener("touchstart", (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+  document.addEventListener("touchend", (e) => {
+    if (touchStartX === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1);
+    touchStartX = null;
+  }, { passive: true });
+
+  render();
+}
+
+load();
+</script>
+</body>
+</html>

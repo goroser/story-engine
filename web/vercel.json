@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/generate-story.js": {
+      "maxDuration": 300
+    }
+  }
+}
