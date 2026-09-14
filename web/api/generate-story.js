@@ -43,13 +43,17 @@ async function writeStory(prompt, ageLevel, characterImage) {
       `Write a short illustrated children's picture book. Prompt from the parent: "${prompt}"\n` +
       `Target age: ${ageLevel || "3-6"}\n\n` +
       "Split it into 6-9 chunks (one per page/scene). Each chunk needs narrative text (a couple of " +
-      "sentences, age-appropriate) and a self-contained image_prompt describing that scene visually, " +
-      "including an explicit shot type/camera angle that fits the moment (wide, medium, close-up, " +
-      "over-the-shoulder, low/high angle, etc.) — vary these across chunks, don't repeat the same shot. " +
-      "character_bible should be a single fixed paragraph describing every character's design (colors, " +
-      "markings, proportions, accessories) and the art style/palette, to keep every illustration " +
-      "consistent — it gets prepended to every chunk's image generation. Only include a character in a " +
-      "chunk's image_prompt if that chunk's narrative text actually calls for them to be present.",
+      "sentences, age-appropriate) and a self-contained image_prompt describing that scene visually: " +
+      "plain prose only, starting directly with the shot description — no labels, prefixes, or field " +
+      "names of any kind (do not write things like 'character_bible;' or 'image_prompt:' at the start; " +
+      "just the description itself, e.g. 'Wide shot: a fox runs through a snowy field at sunset...'). " +
+      "Include an explicit shot type/camera angle that fits the moment (wide, medium, close-up, " +
+      "over-the-shoulder, low/high angle, etc.) as part of that prose — vary these across chunks, don't " +
+      "repeat the same shot. character_bible is a separate field: a single fixed paragraph describing " +
+      "every character's design (colors, markings, proportions, accessories) and the art style/palette. " +
+      "You don't need to reference it or repeat its name inside image_prompt — it's combined with each " +
+      "chunk's image_prompt automatically later. Only include a character in a chunk's image_prompt if " +
+      "that chunk's narrative text actually calls for them to be present.",
   });
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -215,34 +219,84 @@ export default async function handler(req, res) {
   waitUntil(generateRest(storyId, prompt, age_level, character_image));
 }
 
+// Every Supabase write in generateRest is a small "the image is already
+// generated, just needs to land in the DB" step — worth retrying rather
+// than silently moving on. (A real bug found in production: a chunk's
+// image generated and uploaded fine, but the row update that records it
+// wasn't checked for {error} and failed once, silently — the story ended
+// up "ready" missing one picture instead of failing loudly or retrying.)
+async function withRetry(queryFn, label, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    const result = await queryFn();
+    if (!result.error) return result;
+    lastErr = result.error;
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+  }
+  throw new Error(`${label} failed after ${attempts} attempts: ${lastErr.message}`);
+}
+
 async function generateRest(storyId, prompt, age_level, character_image) {
   try {
     const story = await writeStory(prompt, age_level, character_image);
 
-    await supabase
-      .from("stories")
-      .update({ title: story.title, theme: story.theme, age_level: story.age_level, character_bible: story.character_bible })
-      .eq("id", storyId);
+    await withRetry(
+      () =>
+        supabase
+          .from("stories")
+          .update({ title: story.title, theme: story.theme, age_level: story.age_level, character_bible: story.character_bible })
+          .eq("id", storyId),
+      "update story metadata"
+    );
 
-    const chunkRows = story.chunks.map((c, i) => ({ story_id: storyId, order: i, text: c.text, image_prompt: c.image_prompt }));
+    // Defensive cleanup: Claude occasionally echoes a field-name-shaped
+    // label at the start of image_prompt (e.g. "character_bible; ...")
+    // despite being told not to — strip it rather than baking it into
+    // every generated image's prompt.
+    const stripLabel = (s) => s.replace(/^\s*character[_\s]?bible\s*[;:.,-]\s*/i, "");
+    const chunkRows = story.chunks.map((c, i) => ({
+      story_id: storyId,
+      order: i,
+      text: c.text,
+      image_prompt: stripLabel(c.image_prompt),
+    }));
     const { data: insertedChunks, error: chunksErr } = await supabase.from("chunks").insert(chunkRows).select();
     if (chunksErr) throw new Error(`Could not save chunks: ${chunksErr.message}`);
     const chunks = insertedChunks.sort((a, b) => a.order - b.order);
 
     const refImage = await generateReference(story.character_bible, character_image);
     const refPath = await uploadImage(storyId, `reference.${refImage.mimeType.includes("png") ? "png" : "jpg"}`, refImage.bytes, refImage.mimeType);
-    await supabase.from("stories").update({ reference_image_path: refPath }).eq("id", storyId);
+    await withRetry(
+      () => supabase.from("stories").update({ reference_image_path: refPath }).eq("id", storyId),
+      "update story reference_image_path"
+    );
 
     for (const chunk of chunks) {
       const img = await generateChunkImage(story.character_bible, chunk, refImage);
       const ext = img.mimeType.includes("png") ? "png" : "jpg";
       const path = await uploadImage(storyId, `${chunk.id}.${ext}`, img.bytes, img.mimeType);
-      await supabase.from("chunks").update({ image_url: path, status: "has_image" }).eq("id", chunk.id);
+      await withRetry(
+        () => supabase.from("chunks").update({ image_url: path, status: "has_image" }).eq("id", chunk.id),
+        `update chunk ${chunk.id} image_url`
+      );
     }
 
-    await supabase.from("stories").update({ status: "ready" }).eq("id", storyId);
+    await withRetry(
+      () => supabase.from("stories").update({ status: "ready" }).eq("id", storyId),
+      "update story status=ready"
+    );
   } catch (err) {
-    await supabase.from("stories").update({ status: "error", error_message: String(err?.message || err) }).eq("id", storyId);
+    try {
+      await withRetry(
+        () => supabase.from("stories").update({ status: "error", error_message: String(err?.message || err) }).eq("id", storyId),
+        "update story status=error",
+        2
+      );
+    } catch (finalErr) {
+      // Nothing further to fall back to — at least this is visible in
+      // Vercel's function logs.
+      console.error("Could not even record the error state:", finalErr, "original error:", err);
+    }
   }
 }
 
