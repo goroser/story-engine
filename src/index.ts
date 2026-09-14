@@ -238,11 +238,45 @@ function imageExt(mimeType: string): string {
   return mimeType.includes("png") ? "png" : mimeType.split("/")[1] || "png";
 }
 
+const MIME_BY_EXT: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  png: "image/png",
+};
+
 async function loadImageRef(path: string): Promise<{ bytes: Buffer; mimeType: string }> {
   const bytes = await readFile(path);
-  const mimeType = path.endsWith(".jpg") || path.endsWith(".jpeg") ? "image/jpeg" : "image/png";
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  const mimeType = MIME_BY_EXT[ext] ?? "image/png";
   return { bytes, mimeType };
 }
+
+// ---------------------------------------------------------------------------
+// update_character_bible
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "update_character_bible",
+  {
+    title: "Update character bible",
+    description:
+      "Replace a story's character_bible text, e.g. after approving a reference image whose art style " +
+      "or character details differ from the original description. Existing chunk image_prompts are " +
+      "untouched — the bible is prepended to them at generation time.",
+    inputSchema: {
+      story_id: z.string().min(1),
+      character_bible: z.string().min(1),
+    },
+  },
+  async ({ story_id, character_bible }) => {
+    const outcome = await updateStory(story_id, (s) => {
+      s.character_bible = character_bible;
+    });
+    if (!outcome) return errorResult(`No story found with id "${story_id}".`);
+    return textResult(outcome.story);
+  }
+);
 
 // ---------------------------------------------------------------------------
 // generate_character_reference
@@ -260,21 +294,37 @@ server.registerTool(
     description:
       "Render a candidate character reference/model sheet from the story's character_bible alone " +
       "(neutral pose, neutral background, no scene) — for review before illustrating any chunk. " +
-      "Each call produces a new timestamped file and does NOT change the story; call " +
+      "Optionally pass anchor_image_path (e.g. a user-supplied drawing or photo of one character) to " +
+      "lock that character's exact design and have the rest of the cast drawn to match it, in the same " +
+      "style. Each call produces a new timestamped file and does NOT change the story; call " +
       "approve_reference_image once a candidate looks right. Re-run with different notes, or edit " +
       "character_bible first, to try again.",
     inputSchema: {
       story_id: z.string().min(1),
       notes: z.string().optional().describe("Extra guidance for this attempt, e.g. \"make the fox smaller\"."),
+      anchor_image_path: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Path to a reference image for one character whose exact design should be matched."),
     },
   },
-  async ({ story_id, notes }) => {
+  async ({ story_id, notes, anchor_image_path }) => {
     const story = await getStoryById(story_id);
     if (!story) return errorResult(`No story found with id "${story_id}".`);
 
+    let anchorImage: { bytes: Buffer; mimeType: string } | undefined;
+    if (anchor_image_path) {
+      try {
+        anchorImage = await loadImageRef(anchor_image_path);
+      } catch (err) {
+        return errorResult(`Could not read "${anchor_image_path}": ${(err as Error).message}`);
+      }
+    }
+
     let image;
     try {
-      image = await generateReferenceSheet(story, notes);
+      image = await generateReferenceSheet(story, notes, anchorImage);
     } catch (err) {
       if (err instanceof NanoBananaError) return errorResult(err.message);
       return errorResult(`Unexpected error calling nano banana: ${(err as Error).message}`);

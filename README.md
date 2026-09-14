@@ -23,16 +23,22 @@ a thin, dependency-free data layer.
   previously attached image, since it no longer matches.
 - `attach_image(story_id, chunk_id, image_url)` — record a nano banana result
   generated outside the server (e.g. by hand in AI Studio).
-- `generate_character_reference(story_id, notes?)` — render a candidate
-  character/model sheet from `character_bible` alone (neutral pose, no
-  scene), for review before illustrating any chunk. Doesn't touch the story;
-  call it as many times as you like.
+- `generate_character_reference(story_id, notes?, anchor_image_path?)` —
+  render a candidate character/model sheet from `character_bible` alone
+  (neutral pose, no scene), for review before illustrating any chunk.
+  Optionally pass `anchor_image_path` (e.g. a photo/drawing you provide of
+  one character, from `data/uploads/`) to lock that character's exact design
+  and draw the rest of the cast to match it. Doesn't touch the story; call it
+  as many times as you like.
 - `approve_reference_image(story_id, image_path)` — lock in a reference image
   as the story's approved character design: a `generate_character_reference`
   candidate, or any image file of your own (e.g. a reference you drew or
   found). The file is copied into the story's data folder. Every
   `generate_image` call afterward anchors character design on this image
   instead of drifting.
+- `update_character_bible(story_id, character_bible)` — replace the bible
+  text, e.g. after approving a reference image whose art style differs from
+  the original description (chunk `image_prompt`s are untouched).
 - `generate_image(story_id, chunk_id, reference_chunk_id?)` — call nano banana
   (Gemini 2.5 Flash Image) directly: `character_bible` + the chunk's
   `image_prompt`. If the story has an approved `reference_image`, it's used
@@ -136,8 +142,8 @@ is a thin positional-args wrapper around `generate_image` specifically.
 
 ### Consistency lessons learned
 
-Two rounds of feedback reshaped how character consistency and camera variety
-work here:
+Three rounds of feedback reshaped how character consistency and camera
+variety work here:
 
 1. **Don't chain reference images off the previous story chunk.** Early
    version anchored each new chunk on whatever the immediately preceding
@@ -157,6 +163,18 @@ work here:
    medium / close-up, high or low angle, over-the-shoulder, etc.) and
    permits changing location when the story does, instead of reusing the
    same camera position and background across the whole book.
+3. **A generic "vary the camera" system instruction isn't enough on its own
+   if several chunks' `image_prompt` text is itself generic and similar**
+   (e.g. six consecutive scenes all set at the same riverbank, each prompt
+   just describing who's standing where). The model has little to latch onto
+   for variety when the scene description doesn't suggest one. **Fix:**
+   rewrite the repetitive `image_prompt`s themselves with an explicit shot
+   call-out per chunk (close-up on faces, over-the-shoulder, wide shot from
+   behind, top-down on a water reflection, low dynamic angle for action,
+   etc.) via `regenerate_chunk`, then re-run `generate_image`. When output
+   has a fixable root cause in the prompt/text rather than just needing a
+   stronger system instruction, propose and make that rewrite rather than
+   only flagging the symptom.
 
 ## Open questions (from the spec, still unresolved)
 

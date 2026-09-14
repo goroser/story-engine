@@ -61,20 +61,39 @@ async function callNanoBanana(parts: Array<Record<string, unknown>>): Promise<Ge
  * no chunk content. This is meant to be reviewed and approved once per story,
  * then used to anchor every chunk's illustration so character design stays
  * fixed instead of drifting generation-to-generation.
+ *
+ * If anchorImage is given (e.g. a user-supplied drawing/photo of one
+ * character), it's used to lock that character's exact design; the rest of
+ * the cast is added to match, in the same style, per the bible text.
  */
-export async function generateReferenceSheet(story: Story, extraNotes?: string): Promise<GeneratedImage> {
-  const parts: Array<Record<string, unknown>> = [
-    {
+export async function generateReferenceSheet(
+  story: Story,
+  extraNotes?: string,
+  anchorImage?: ImageRef
+): Promise<GeneratedImage> {
+  const parts: Array<Record<string, unknown>> = [];
+
+  if (anchorImage) {
+    parts.push({ inlineData: { mimeType: anchorImage.mimeType, data: anchorImage.bytes.toString("base64") } });
+    parts.push({
       text:
-        `${story.character_bible}\n\n` +
-        "Character reference sheet: show all the characters described above clearly, full body, " +
-        "standing in simple neutral poses facing slightly toward camera, on a plain neutral background " +
-        "(no scene, no props beyond what defines the character). This is a model sheet for establishing " +
-        "their exact design — proportions, colors, markings, clothing/accessories — to be reused " +
-        "consistently across many illustrations. No text or lettering in the image." +
-        (extraNotes ? `\n\nAdditional notes: ${extraNotes}` : ""),
-    },
-  ];
+        "The attached image is the approved, exact design for one of the characters described below — " +
+        "match it precisely (proportions, colors, markings, accessories). Redraw that same character in " +
+        "the reference sheet below, plus the rest of the cast, all in a single consistent illustration " +
+        "style suitable for the same picture book.",
+    });
+  }
+
+  parts.push({
+    text:
+      `${story.character_bible}\n\n` +
+      "Character reference sheet: show all the characters described above clearly, full body, " +
+      "standing side by side in simple neutral poses facing slightly toward camera, on a plain neutral " +
+      "background (no scene, no props beyond what defines each character). This is a model sheet for " +
+      "establishing their exact design — proportions, colors, markings, clothing/accessories — to be " +
+      "reused consistently across many illustrations. No text or lettering in the image." +
+      (extraNotes ? `\n\nAdditional notes: ${extraNotes}` : ""),
+  });
   return callNanoBanana(parts);
 }
 
