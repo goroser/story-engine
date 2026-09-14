@@ -146,7 +146,7 @@ async function load() {
 function renderBook(story, chunks) {
   document.title = story.title;
   const bookEl = document.getElementById("book");
-  const coverImg = imgSrc(chunks[0]?.image_path);
+  const coverImg = imgSrc(chunks[0]?.image_url);
 
   const pages = [];
   pages.push(
@@ -157,7 +157,7 @@ function renderBook(story, chunks) {
       '</section>'
   );
   chunks.forEach((c, i) => {
-    const src = imgSrc(c.image_path);
+    const src = imgSrc(c.image_url);
     pages.push(
       '<section class="page spread" data-page="' + (i + 1) + '">' +
         '<div class="spread-image">' + (src ? '<img src="' + esc(src) + '" alt="">' : '<div>Нет картинки</div>') + '</div>' +

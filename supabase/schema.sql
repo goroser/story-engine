@@ -1,5 +1,11 @@
 -- Story Engine — Supabase schema.
--- Run this once in the Supabase SQL editor (Project → SQL Editor → New query).
+--
+-- Safe to run on a fresh project OR on one that already has stories/chunks
+-- tables from the original spec's manual prototype (id, title, theme,
+-- age_level, character_bible, created_at, rating, notes / id, story_id,
+-- "order", text, image_prompt, image_url, status) — every statement here is
+-- additive (create-if-missing, add-column-if-missing) and never drops or
+-- overwrites existing rows.
 
 create extension if not exists "pgcrypto";
 
@@ -9,13 +15,19 @@ create table if not exists stories (
   theme text not null,
   age_level text not null,
   character_bible text not null,
-  reference_image_path text,          -- path within the "story-images" bucket
-  status text not null default 'generating', -- generating | ready | error
-  error_message text,
+  created_at timestamptz not null default now(),
   rating text,
-  notes text,
-  created_at timestamptz not null default now()
+  notes text
 );
+
+-- Columns the self-service generation pipeline needs on top of the
+-- original spec's data model (progress tracking + the approved character
+-- reference sheet). default 'ready' so any pre-existing row (e.g. a
+-- hand-seeded prototype story) shows up immediately rather than looking
+-- like it's stuck generating.
+alter table stories add column if not exists status text not null default 'ready';
+alter table stories add column if not exists error_message text;
+alter table stories add column if not exists reference_image_path text;
 
 create table if not exists chunks (
   id uuid primary key default gen_random_uuid(),
@@ -23,9 +35,8 @@ create table if not exists chunks (
   "order" int not null,
   text text not null,
   image_prompt text not null,
-  image_path text,                    -- path within the "story-images" bucket
-  status text not null default 'draft', -- draft | has_image
-  unique (story_id, "order")
+  image_url text,
+  status text not null default 'draft'
 );
 
 create index if not exists chunks_story_id_idx on chunks(story_id);

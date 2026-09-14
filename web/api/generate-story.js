@@ -237,7 +237,7 @@ async function generateRest(storyId, prompt, age_level, character_image) {
       const img = await generateChunkImage(story.character_bible, chunk, refImage);
       const ext = img.mimeType.includes("png") ? "png" : "jpg";
       const path = await uploadImage(storyId, `${chunk.id}.${ext}`, img.bytes, img.mimeType);
-      await supabase.from("chunks").update({ image_path: path, status: "has_image" }).eq("id", chunk.id);
+      await supabase.from("chunks").update({ image_url: path, status: "has_image" }).eq("id", chunk.id);
     }
 
     await supabase.from("stories").update({ status: "ready" }).eq("id", storyId);
