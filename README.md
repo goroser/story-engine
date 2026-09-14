@@ -90,17 +90,29 @@ node scripts/try-generate-image.mjs <story_id> <chunk_id> [reference_chunk_id]
 1. ✅ Scaffolded server, `create_story` + `get_story`, flat JSON storage.
 2. ✅ Generated one full story ("Хэри Маклери и муравьед", 10 chunks) through
    a live Claude session via the real tool calls.
-3. 🟡 `generate_image` calls nano banana directly and is verified against the
-   real API (correct model, request shape, error handling) — but the current
-   `GEMINI_API_KEY`'s project has no billing enabled, so every call currently
-   returns `RESOURCE_EXHAUSTED` (free-tier image quota is 0). Enable billing
-   on the key's Google Cloud project, then re-run to confirm consistency
-   holds across chunks.
+3. ✅ Generated all 10 images for the test story via `generate_image` and
+   confirmed consistency holds — see note below on the reference technique.
 4. ✅ `attach_image` implemented and exercised.
 5. ✅ `list_stories` / `rate_story` implemented.
-6. 🟡 Auto-call nano banana from the server — done (`generate_image`), blocked
-   on billing above. PDF/web assembly and TTS still open.
+6. 🟡 Auto-call nano banana from the server — done (`generate_image`). PDF/web
+   assembly and TTS still open.
 7. ⬜ iPad viewer (static site reading the story data, Add to Home Screen).
+
+### Reference-chunk lesson learned
+
+Chaining each `generate_image` call off the *immediately preceding* chunk
+propagates whatever that chunk looked like — including intentionally faint
+or partial renders. In the test story, one chunk's prompt called for a
+character to appear only as a background silhouette; every subsequent chunk
+that referenced its predecessor inherited that washed-out look for several
+pages afterward, even once the text described the character as fully
+present. Regenerating those chunks with `reference_chunk_id` pointed at a
+chunk where the character was fully, solidly rendered (rather than the
+previous chunk) fixed it immediately.
+
+Takeaway: pick the reference chunk deliberately — usually the most recent
+*solid* rendering of a character, not strictly whichever chunk comes right
+before it — rather than always chaining sequentially.
 
 ## Open questions (from the spec, still unresolved)
 
