@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { generateChunkImage, NanoBananaError } from "./nanobanana.js";
+import { generateChunkImage, generateReferenceSheet, NanoBananaError } from "./nanobanana.js";
 import { dataDir, getStoryById, loadStories, saveStory, updateStory } from "./storage.js";
 import type { Chunk, Story } from "./types.js";
 
@@ -41,6 +41,7 @@ function summarize(story: Story) {
     created_at: story.created_at,
     rating: story.rating,
     chunk_count: story.chunks.length,
+    reference_image: story.reference_image,
   };
 }
 
@@ -91,6 +92,7 @@ server.registerTool(
       theme,
       age_level,
       character_bible,
+      reference_image: null,
       created_at: now,
       rating: null,
       notes: null,
@@ -232,6 +234,99 @@ server.registerTool(
   }
 );
 
+function imageExt(mimeType: string): string {
+  return mimeType.includes("png") ? "png" : mimeType.split("/")[1] || "png";
+}
+
+async function loadImageRef(path: string): Promise<{ bytes: Buffer; mimeType: string }> {
+  const bytes = await readFile(path);
+  const mimeType = path.endsWith(".jpg") || path.endsWith(".jpeg") ? "image/jpeg" : "image/png";
+  return { bytes, mimeType };
+}
+
+// ---------------------------------------------------------------------------
+// generate_character_reference
+//
+// Renders a candidate character reference sheet from character_bible alone —
+// no scene content — so the cast's design can be reviewed and locked in
+// before any chunk is illustrated. Recommended workflow: call this (possibly
+// a few times, tweaking notes/character_bible between tries), look at the
+// result, then approve_reference_image once it's right.
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "generate_character_reference",
+  {
+    title: "Generate character reference",
+    description:
+      "Render a candidate character reference/model sheet from the story's character_bible alone " +
+      "(neutral pose, neutral background, no scene) — for review before illustrating any chunk. " +
+      "Each call produces a new timestamped file and does NOT change the story; call " +
+      "approve_reference_image once a candidate looks right. Re-run with different notes, or edit " +
+      "character_bible first, to try again.",
+    inputSchema: {
+      story_id: z.string().min(1),
+      notes: z.string().optional().describe("Extra guidance for this attempt, e.g. \"make the fox smaller\"."),
+    },
+  },
+  async ({ story_id, notes }) => {
+    const story = await getStoryById(story_id);
+    if (!story) return errorResult(`No story found with id "${story_id}".`);
+
+    let image;
+    try {
+      image = await generateReferenceSheet(story, notes);
+    } catch (err) {
+      if (err instanceof NanoBananaError) return errorResult(err.message);
+      return errorResult(`Unexpected error calling nano banana: ${(err as Error).message}`);
+    }
+
+    const imageDir = join(dataDir, "images", story_id);
+    await mkdir(imageDir, { recursive: true });
+    const imagePath = join(imageDir, `reference-candidate-${Date.now()}.${imageExt(image.mimeType)}`);
+    await writeFile(imagePath, image.bytes);
+    return textResult({ story_id, candidate_path: imagePath });
+  }
+);
+
+// ---------------------------------------------------------------------------
+// approve_reference_image
+// ---------------------------------------------------------------------------
+server.registerTool(
+  "approve_reference_image",
+  {
+    title: "Approve reference image",
+    description:
+      "Lock in an image as the story's approved character reference — from a generate_character_reference " +
+      "candidate, or any image file of your own (e.g. a hand-drawn or uploaded reference for what the " +
+      "characters should look like). The file is copied into the story's own data folder, so the original " +
+      "can move or be deleted afterward. Every generate_image call afterward anchors character design on " +
+      "this image instead of drifting across chunks.",
+    inputSchema: {
+      story_id: z.string().min(1),
+      image_path: z.string().min(1),
+    },
+  },
+  async ({ story_id, image_path }) => {
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(image_path);
+    } catch (err) {
+      return errorResult(`Could not read "${image_path}": ${(err as Error).message}`);
+    }
+    const ext = image_path.split(".").pop()?.toLowerCase() || "png";
+    const imageDir = join(dataDir, "images", story_id);
+    await mkdir(imageDir, { recursive: true });
+    const storedPath = join(imageDir, `reference-approved.${ext}`);
+    await writeFile(storedPath, bytes);
+
+    const outcome = await updateStory(story_id, (s) => {
+      s.reference_image = storedPath;
+    });
+    if (!outcome) return errorResult(`No story found with id "${story_id}".`);
+    return textResult(summarize(outcome.story));
+  }
+);
+
 // ---------------------------------------------------------------------------
 // generate_image
 //
@@ -244,12 +339,15 @@ server.registerTool(
   {
     title: "Generate image",
     description:
-      "Render one chunk's illustration by calling nano banana (Gemini 2.5 Flash Image) with the " +
-      "story's character_bible plus this chunk's image_prompt. Optionally pass reference_chunk_id " +
-      "to ground it on another chunk's already-generated image, for consistent character/setting " +
-      "look across the book (camera angle and pose are still left free to vary). Saves the PNG " +
-      "locally under data/images/ and records it on the chunk, same effect as attach_image. " +
-      "Requires GEMINI_API_KEY in the server's environment.",
+      "Render one chunk's illustration by calling nano banana (Gemini 2.5 Flash Image) with the story's " +
+      "character_bible plus this chunk's image_prompt. If the story has an approved reference_image " +
+      "(see approve_reference_image), it's used automatically to anchor character design — recommended " +
+      "for any story with more than one or two chunks, since generation drifts otherwise. Optionally also " +
+      "pass reference_chunk_id to ground the *setting* on another chunk's image (e.g. a revisited " +
+      "location) — camera angle, framing, and pose are always left free to vary regardless of references, " +
+      "and the model is instructed to pick a shot type that fits the scene rather than reusing the same " +
+      "static composition. Saves the PNG locally under data/images/ and records it on the chunk, same " +
+      "effect as attach_image. Requires GEMINI_API_KEY in the server's environment.",
     inputSchema: {
       story_id: z.string().min(1),
       chunk_id: z.string().min(1),
@@ -262,7 +360,18 @@ server.registerTool(
     const chunk = story.chunks.find((c) => c.id === chunk_id);
     if (!chunk) return errorResult(`No chunk found with id "${chunk_id}" in story "${story_id}".`);
 
-    let referenceImage: { bytes: Buffer; mimeType: string } | undefined;
+    let characterReference: { bytes: Buffer; mimeType: string } | undefined;
+    if (story.reference_image) {
+      try {
+        characterReference = await loadImageRef(story.reference_image);
+      } catch (err) {
+        return errorResult(
+          `Could not read approved reference_image at "${story.reference_image}": ${(err as Error).message}`
+        );
+      }
+    }
+
+    let sceneReference: { bytes: Buffer; mimeType: string } | undefined;
     if (reference_chunk_id) {
       const refChunk = story.chunks.find((c) => c.id === reference_chunk_id);
       if (!refChunk) {
@@ -272,8 +381,7 @@ server.registerTool(
         return errorResult(`Reference chunk "${reference_chunk_id}" has no generated image yet.`);
       }
       try {
-        const bytes = await readFile(refChunk.image_url);
-        referenceImage = { bytes, mimeType: "image/png" };
+        sceneReference = await loadImageRef(refChunk.image_url);
       } catch (err) {
         return errorResult(`Could not read reference image at "${refChunk.image_url}": ${(err as Error).message}`);
       }
@@ -281,16 +389,15 @@ server.registerTool(
 
     let image;
     try {
-      image = await generateChunkImage({ story, chunk, referenceImage });
+      image = await generateChunkImage({ story, chunk, characterReference, sceneReference });
     } catch (err) {
       if (err instanceof NanoBananaError) return errorResult(err.message);
       return errorResult(`Unexpected error calling nano banana: ${(err as Error).message}`);
     }
 
-    const ext = image.mimeType.includes("png") ? "png" : image.mimeType.split("/")[1] || "png";
     const imageDir = join(dataDir, "images", story_id);
     await mkdir(imageDir, { recursive: true });
-    const imagePath = join(imageDir, `${chunk_id}.${ext}`);
+    const imagePath = join(imageDir, `${chunk_id}.${imageExt(image.mimeType)}`);
     await writeFile(imagePath, image.bytes);
 
     const outcome = await updateStory(story_id, (s) => {

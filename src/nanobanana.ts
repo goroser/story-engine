@@ -9,27 +9,14 @@ export interface GeneratedImage {
   mimeType: string;
 }
 
-interface GenerateArgs {
-  story: Story;
-  chunk: Chunk;
-  /** A previously-generated chunk to pass in as a character/setting reference image. */
-  referenceImage?: { bytes: Buffer; mimeType: string };
-}
-
 export class NanoBananaError extends Error {}
 
-/**
- * Renders one chunk's illustration: the story's character/style bible prepended
- * to the chunk's scene prompt, optionally grounded by a reference image from an
- * earlier chunk. Per the project spec, the reference is scoped explicitly to
- * character/setting only — not camera angle or pose — so illustrations stay
- * varied while the cast and world stay consistent.
- */
-export async function generateChunkImage({
-  story,
-  chunk,
-  referenceImage,
-}: GenerateArgs): Promise<GeneratedImage> {
+interface ImageRef {
+  bytes: Buffer;
+  mimeType: string;
+}
+
+async function callNanoBanana(parts: Array<Record<string, unknown>>): Promise<GeneratedImage> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new NanoBananaError(
@@ -37,27 +24,6 @@ export async function generateChunkImage({
     );
   }
   const model = process.env.NANO_BANANA_MODEL || DEFAULT_MODEL;
-
-  const parts: Array<Record<string, unknown>> = [];
-  if (referenceImage) {
-    parts.push({
-      inlineData: {
-        mimeType: referenceImage.mimeType,
-        data: referenceImage.bytes.toString("base64"),
-      },
-    });
-    parts.push({
-      text:
-        "Use the attached image only as a reference for how the characters and location look — " +
-        "feel free to change the camera angle, composition, and character poses for this new scene.",
-    });
-  }
-  parts.push({
-    text:
-      `${story.character_bible}\n\n` +
-      `Scene to illustrate: ${chunk.image_prompt}\n\n` +
-      "Children's picture-book illustration. No text or lettering in the image.",
-  });
 
   const res = await fetch(`${API_BASE}/${model}:generateContent?key=${apiKey}`, {
     method: "POST",
@@ -88,4 +54,87 @@ export async function generateChunkImage({
   }
   const inline = (imagePart as any).inlineData as { mimeType: string; data: string };
   return { bytes: Buffer.from(inline.data, "base64"), mimeType: inline.mimeType || "image/png" };
+}
+
+/**
+ * Generates a character reference sheet from the bible text alone — no scene,
+ * no chunk content. This is meant to be reviewed and approved once per story,
+ * then used to anchor every chunk's illustration so character design stays
+ * fixed instead of drifting generation-to-generation.
+ */
+export async function generateReferenceSheet(story: Story, extraNotes?: string): Promise<GeneratedImage> {
+  const parts: Array<Record<string, unknown>> = [
+    {
+      text:
+        `${story.character_bible}\n\n` +
+        "Character reference sheet: show all the characters described above clearly, full body, " +
+        "standing in simple neutral poses facing slightly toward camera, on a plain neutral background " +
+        "(no scene, no props beyond what defines the character). This is a model sheet for establishing " +
+        "their exact design — proportions, colors, markings, clothing/accessories — to be reused " +
+        "consistently across many illustrations. No text or lettering in the image." +
+        (extraNotes ? `\n\nAdditional notes: ${extraNotes}` : ""),
+    },
+  ];
+  return callNanoBanana(parts);
+}
+
+interface GenerateSceneArgs {
+  story: Story;
+  chunk: Chunk;
+  /** The approved character reference sheet — locks character design. */
+  characterReference?: ImageRef;
+  /** Optionally also ground setting on a specific prior chunk's illustration. */
+  sceneReference?: ImageRef;
+}
+
+/**
+ * Renders one chunk's illustration: the character/style bible plus the
+ * chunk's scene prompt, anchored on the approved character reference (if
+ * any). Explicitly pushes for camera/composition variety — reference images
+ * lock character design and setting, never viewpoint, framing, or location.
+ */
+export async function generateChunkImage({
+  story,
+  chunk,
+  characterReference,
+  sceneReference,
+}: GenerateSceneArgs): Promise<GeneratedImage> {
+  const parts: Array<Record<string, unknown>> = [];
+
+  if (characterReference) {
+    parts.push({
+      inlineData: { mimeType: characterReference.mimeType, data: characterReference.bytes.toString("base64") },
+    });
+    parts.push({
+      text:
+        "The attached image is the approved character reference sheet. Match every character's design " +
+        "exactly — proportions, colors, markings, accessories — but this is a reference sheet, not a scene: " +
+        "do not copy its plain background, its pose, or its camera framing into the new illustration.",
+    });
+  }
+
+  if (sceneReference) {
+    parts.push({
+      inlineData: { mimeType: sceneReference.mimeType, data: sceneReference.bytes.toString("base64") },
+    });
+    parts.push({
+      text:
+        "The attached image is a previous illustration from the same book, for continuity of the setting/" +
+        "location only (e.g. if this scene revisits the same place). Do not copy its camera angle, " +
+        "composition, or character poses.",
+    });
+  }
+
+  parts.push({
+    text:
+      `${story.character_bible}\n\n` +
+      `Scene to illustrate: ${chunk.image_prompt}\n\n` +
+      "Vary the camera: choose a shot type and angle that fits this specific moment (wide establishing " +
+      "shot, medium shot, close-up on faces/expressions, low or high angle, over-the-shoulder, etc.) — " +
+      "do not default to a static wide shot from directly in front. If the story moves to a new location " +
+      "for this scene, show that new location rather than reusing the previous background. " +
+      "Children's picture-book illustration. No text or lettering in the image.",
+  });
+
+  return callNanoBanana(parts);
 }

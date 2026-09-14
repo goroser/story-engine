@@ -23,13 +23,26 @@ a thin, dependency-free data layer.
   previously attached image, since it no longer matches.
 - `attach_image(story_id, chunk_id, image_url)` — record a nano banana result
   generated outside the server (e.g. by hand in AI Studio).
+- `generate_character_reference(story_id, notes?)` — render a candidate
+  character/model sheet from `character_bible` alone (neutral pose, no
+  scene), for review before illustrating any chunk. Doesn't touch the story;
+  call it as many times as you like.
+- `approve_reference_image(story_id, image_path)` — lock in a reference image
+  as the story's approved character design: a `generate_character_reference`
+  candidate, or any image file of your own (e.g. a reference you drew or
+  found). The file is copied into the story's data folder. Every
+  `generate_image` call afterward anchors character design on this image
+  instead of drifting.
 - `generate_image(story_id, chunk_id, reference_chunk_id?)` — call nano banana
   (Gemini 2.5 Flash Image) directly: `character_bible` + the chunk's
-  `image_prompt`, optionally grounded on another chunk's already-generated
-  image via `reference_chunk_id` for character/setting consistency (camera
-  angle and pose are deliberately left free to vary, per the spec). Saves the
-  PNG under `data/images/<story_id>/<chunk_id>.png` and attaches it — same
-  effect as `attach_image`, just automatic. Requires `GEMINI_API_KEY`.
+  `image_prompt`. If the story has an approved `reference_image`, it's used
+  automatically to anchor character design. `reference_chunk_id` optionally
+  grounds the *setting* on another chunk's image (e.g. a revisited location).
+  Camera angle, shot type, and pose are always left free to vary — the prompt
+  explicitly tells nano banana to pick a composition that fits the scene
+  rather than reusing the same static shot. Saves the PNG under
+  `data/images/<story_id>/<chunk_id>.png` and attaches it — same effect as
+  `attach_image`, just automatic. Requires `GEMINI_API_KEY`.
 - `rate_story(id, reaction, notes?)` — log how it landed (e.g. `"loved"`), to
   steer future prompts.
 
@@ -76,14 +89,37 @@ point:
 
 (For Claude Code: `claude mcp add story-engine -- node /Users/romangorbatov/code/story-engine/dist/index.js`)
 
-## Manual testing
+## Uploading your own character reference
 
-`scripts/try-generate-image.mjs` calls `generate_image` over a real MCP
-stdio connection, without needing a full chat session:
+To ground generation on your own reference image instead of one nano banana
+invents from the bible text, drop the file in `data/uploads/` (created for
+this, gitignored) and approve it:
 
 ```bash
-node scripts/try-generate-image.mjs <story_id> <chunk_id> [reference_chunk_id]
+node scripts/try-tool.mjs approve_reference_image '{"story_id":"<id>","image_path":"data/uploads/your-file.png"}'
 ```
+
+**A note on copyrighted characters:** if a story uses a real, published
+character (name and/or likeness from an existing book, show, etc.), treat
+any reference image or generated art the same way you'd treat a scan of the
+book itself — fine for a private family keepsake, not something to publish,
+print for sale, or post publicly. `story-engine` doesn't enforce this; it's
+on you per-story.
+
+## Manual testing
+
+`scripts/try-tool.mjs` calls any tool over a real MCP stdio connection,
+without needing a full chat session:
+
+```bash
+node scripts/try-tool.mjs <tool_name> '<json args>'
+# e.g.
+node scripts/try-tool.mjs generate_character_reference '{"story_id":"<id>"}'
+node scripts/try-tool.mjs generate_image '{"story_id":"<id>","chunk_id":"<id>"}'
+```
+
+`scripts/try-generate-image.mjs <story_id> <chunk_id> [reference_chunk_id]`
+is a thin positional-args wrapper around `generate_image` specifically.
 
 ## Status vs. the spec's build order
 
@@ -98,21 +134,29 @@ node scripts/try-generate-image.mjs <story_id> <chunk_id> [reference_chunk_id]
    assembly and TTS still open.
 7. ⬜ iPad viewer (static site reading the story data, Add to Home Screen).
 
-### Reference-chunk lesson learned
+### Consistency lessons learned
 
-Chaining each `generate_image` call off the *immediately preceding* chunk
-propagates whatever that chunk looked like — including intentionally faint
-or partial renders. In the test story, one chunk's prompt called for a
-character to appear only as a background silhouette; every subsequent chunk
-that referenced its predecessor inherited that washed-out look for several
-pages afterward, even once the text described the character as fully
-present. Regenerating those chunks with `reference_chunk_id` pointed at a
-chunk where the character was fully, solidly rendered (rather than the
-previous chunk) fixed it immediately.
+Two rounds of feedback reshaped how character consistency and camera variety
+work here:
 
-Takeaway: pick the reference chunk deliberately — usually the most recent
-*solid* rendering of a character, not strictly whichever chunk comes right
-before it — rather than always chaining sequentially.
+1. **Don't chain reference images off the previous story chunk.** Early
+   version anchored each new chunk on whatever the immediately preceding
+   chunk looked like. That propagates drift — including intentionally faint
+   or partial renders (one chunk's prompt called for a character to appear
+   only as a background silhouette, and every later chunk that referenced
+   its predecessor inherited that washed-out look for several pages, even
+   once the text said the character was fully present) and general per-call
+   variance (by chunk 3, the character's proportions and markings had
+   already drifted from the bible). **Fix:** generate a dedicated character
+   reference sheet from `character_bible` alone (`generate_character_reference`),
+   review it, lock it in (`approve_reference_image`), and anchor every
+   chunk on *that one approved image* — never on other chunks' output.
+2. **Without explicit instruction, nano banana defaults to the same static
+   wide shot for every scene.** `generate_image`'s prompt now explicitly
+   asks for a shot type and angle that fits each specific moment (wide /
+   medium / close-up, high or low angle, over-the-shoulder, etc.) and
+   permits changing location when the story does, instead of reusing the
+   same camera position and background across the whole book.
 
 ## Open questions (from the spec, still unresolved)
 
