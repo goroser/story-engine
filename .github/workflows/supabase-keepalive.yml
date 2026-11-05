@@ -19,7 +19,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           failed=0
-          for table in stories chunks texts; do
+          for table in stories chunks; do
             code=$(curl -sS -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 10 \
               "$SUPABASE_URL/rest/v1/$table?select=*&limit=1" \
               -H "apikey: $SUPABASE_KEY" \
